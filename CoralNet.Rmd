@@ -1,0 +1,95 @@
+---
+title: "CoralNet"
+author: "Rei Diga"
+date: "4/26/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Packgaes
+```{r include=FALSE}
+#clear environment 
+rm(list=ls())
+
+#install.packages('pacman')
+#install.packages("googlesheets4")
+#install.packages("rareNMtests")
+#install.packages("betapart")
+library(rareNMtests)
+library(googlesheets4)
+library(betapart)
+library(RColorBrewer)
+
+library(pacman)
+p_load(dplyr, tidyr, vegan, reshape2, ggplot2, tidyverse, colourpicker, data.table)
+```
+
+```{r}
+coralnet_raw <- read.csv("annotations_26_04_2021.csv")
+
+coralnet_data <- coralnet_raw %>% 
+  select(Name, Date, Plot_ID, Treatment, Treatment_area, Label) %>% 
+  rename(Treatment.code = "Treatment" ) %>% 
+  mutate(Treatment = ifelse(Treatment.code == "A", "Poison",
+                     ifelse(Treatment.code == "B", "Removal",
+                     ifelse(Treatment.code == "C", "Control",NA)))) %>% 
+  relocate(Treatment, .after = Treatment.code) 
+```
+
+```{r}
+coralnet_wide <- coralnet_data %>% 
+  group_by(Name, Date, Plot_ID, Treatment.code, Treatment, Treatment_area, Label) %>%
+  dplyr::summarise(points = n()) %>% 
+  spread(Label, points, fill = 0)
+
+meta <- coralnet_wide[1:6]
+matrix <- coralnet_wide[7:length(coralnet_wide)]
+
+coralnet_wide$Total.points = rowSums(matrix)
+
+coralnet_wide <- coralnet_wide %>% 
+  mutate(calculation.points = Total.points-(TAG+SHAD+UNFO)) %>% 
+  select(-TAG,-SHAD,-UNFO,-Total.points)
+
+p.cover_meta <- coralnet_wide[1:6]
+p.cover_matrix <- coralnet_wide[7:length(coralnet_wide)]
+ 
+p.cover <- round(x = p.cover_matrix / p.cover_matrix$calculation.points, digits = 3)
+p.cover <- cbind(p.cover_meta, p.cover)
+
+# Convert to long format 
+p.cover_long <- p.cover %>%
+  select(-calculation.points) %>% 
+  reshape2::melt(id.vars = names(p.cover_meta), 
+                 measure.vars = names(p.cover[,7:37])) %>% 
+  dplyr::rename(p_cover = value, Species = variable) 
+
+
+# Define the number of colors (Taxons) for the stacked plot
+cols <- 37
+mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(cols)
+
+# Stacked bars
+(algae_p.cover <- ggplot(data = p.cover_long,
+                         aes(x = Plot_ID, y = p_cover, fill = Species)) + 
+  geom_bar(position = "fill", stat = "identity", width = 0.7)  +
+  labs(x = NULL, y = "Relative cover of species", fill = NULL) +
+  facet_grid(~ Treatment_area) +
+  scale_fill_manual(values = mycolors)) +
+  theme(strip.background = element_rect(fill="grey"), 
+        strip.text.x     = element_text(size = 14, color = "black"),
+        strip.text.y     = element_text(size=14, color = "black"),
+        panel.background = element_rect(fill = "white", color = "black"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x      = element_text(color = "black", size = 14, hjust = 1),
+        axis.text.y      = element_text(color = "black", size = 14),
+        axis.title.y     = element_text(size = 16, hjust = .5, vjust = 1),
+        axis.title.x = element_blank(),
+        legend.position = "right",
+        axis.line = element_line(color = "black"))
+
+```
+
