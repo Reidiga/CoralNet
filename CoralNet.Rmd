@@ -23,9 +23,9 @@ library(betapart)
 library(RColorBrewer)
 
 library(pacman)
-p_load(dplyr, tidyr, vegan, reshape2, ggplot2, tidyverse, colourpicker, data.table)
+p_load(dplyr, tidyr, vegan, reshape2, ggplot2, tidyverse, data.table)
 ```
-
+# Create a database
 ```{r}
 coralnet_raw <- read.csv("annotations_26_04_2021.csv")
 
@@ -37,7 +37,7 @@ coralnet_data <- coralnet_raw %>%
                      ifelse(Treatment.code == "C", "Control",NA)))) %>% 
   relocate(Treatment, .after = Treatment.code) 
 ```
-
+# Create a long format and convert to long format
 ```{r}
 coralnet_wide <- coralnet_data %>% 
   group_by(Name, Date, Plot_ID, Treatment.code, Treatment, Treatment_area, Label) %>%
@@ -66,7 +66,14 @@ p.cover_long <- p.cover %>%
                  measure.vars = names(p.cover[,7:37])) %>% 
   dplyr::rename(p_cover = value, Species = variable) 
 
+p.cover_long <- p.cover_long %>%
+  mutate(month.number = substr(Name, 3,3),
+         Month = ifelse(month.number == "6", "July",
+                        ifelse(month.number == "7","July","August")))
+```
 
+Plot
+```{r}
 # Define the number of colors (Taxons) for the stacked plot
 cols <- 37
 mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(cols)
@@ -76,7 +83,7 @@ mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(cols)
                          aes(x = Plot_ID, y = p_cover, fill = Species)) + 
   geom_bar(position = "fill", stat = "identity", width = 0.7)  +
   labs(x = NULL, y = "Relative cover of species", fill = NULL) +
-  facet_grid(~ Treatment_area) +
+  facet_grid(Month ~ Treatment_area) +
   scale_fill_manual(values = mycolors)) +
   theme(strip.background = element_rect(fill="grey"), 
         strip.text.x     = element_text(size = 14, color = "black"),
@@ -90,6 +97,5 @@ mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(cols)
         axis.title.x = element_blank(),
         legend.position = "right",
         axis.line = element_line(color = "black"))
-
 ```
 
