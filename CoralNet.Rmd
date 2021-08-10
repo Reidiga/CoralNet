@@ -25,9 +25,9 @@ library(RColorBrewer)
 library(pacman)
 p_load(dplyr, tidyr, vegan, reshape2, ggplot2, tidyverse, data.table)
 ```
-# Create a database
+# Create a long format database with additions of meta data
 ```{r}
-coralnet_raw <- read.csv("annotations_26_04_2021.csv")
+coralnet_raw <- read.csv("annotations22-07-21.csv")
 
 coralnet_data <- coralnet_raw %>% 
   select(Name, Date, Plot_ID, Treatment, Treatment_area, Label) %>% 
@@ -35,55 +35,107 @@ coralnet_data <- coralnet_raw %>%
   mutate(Treatment = ifelse(Treatment.code == "A", "Poison",
                      ifelse(Treatment.code == "B", "Removal",
                      ifelse(Treatment.code == "C", "Control",NA)))) %>% 
-  relocate(Treatment, .after = Treatment.code) 
+  relocate(Treatment, .after = Treatment.code) %>% 
+  mutate(month.number = substr(Date, 6,7)) 
+
+# Data of the months surveyed
+month.codes <- as.data.frame(bind_cols("month.number" = unique(coralnet_data$month.number), "Month" =  c("November 20", "November 20", "December 20", "July 20", "July 20", "August 20", "May 21")))
+
+coralnet_data <- coralnet_data %>% 
+  left_join(month.codes) %>% 
+  relocate(Month, .after = Date) %>% 
+  select(-month.number)
+
+coralnet_data$Month <- as.factor(coralnet_data$Month)
+coralnet_data$Month <- factor(coralnet_data$Month, levels = c("July 20", "August 20", "November 20", "December 20", "May 21"))
 ```
-# Create a long format and convert to long format
+
+# Group together all invertebrates and consider to removae very low frequencies of algae
 ```{r}
-coralnet_wide <- coralnet_data %>% 
-  group_by(Name, Date, Plot_ID, Treatment.code, Treatment, Treatment_area, Label) %>%
+# A vector with all invertebrates categories for grouping all togehther
+codes.vector <-c(SP = "Invertebrates", Tun_col = "Invertebrates", bryozoan = "Invertebrates", Tun_sol = "Invertebrates", `OTH-SINV` = "Invertebrates", CH = "Invertebrates", Serpulworm = "Invertebrates")
+
+# Create a new column with the grouped variables desired
+coralnet_data1 <- coralnet_data %>% 
+  mutate(Taxa = as.character(codes.vector[Label])) %>% 
+  mutate(Taxa = ifelse(is.na(Taxa), Label, Taxa))
+```
+
+# Create a wide format and convert to long format
+```{r}
+coralnet_wide <- coralnet_data1 %>% 
+  group_by(Name, Date, Month, Plot_ID, Treatment.code, Treatment, Treatment_area, Taxa) %>%
   dplyr::summarise(points = n()) %>% 
-  spread(Label, points, fill = 0)
+  spread(Taxa, points, fill = 0)
 
-meta <- coralnet_wide[1:6]
-matrix <- coralnet_wide[7:length(coralnet_wide)]
+meta <- coralnet_wide[1:7]
+sp.matrix <- coralnet_wide[8:length(coralnet_wide)]
 
-coralnet_wide$Total.points = rowSums(matrix)
+coralnet_wide$Total.points = rowSums(sp.matrix)
 
 coralnet_wide <- coralnet_wide %>% 
   mutate(calculation.points = Total.points-(TAG+SHAD+UNFO)) %>% 
   select(-TAG,-SHAD,-UNFO,-Total.points)
 
-p.cover_meta <- coralnet_wide[1:6]
-p.cover_matrix <- coralnet_wide[7:length(coralnet_wide)]
+p.cover_meta <- coralnet_wide[1:7]
+p.cover_matrix <- coralnet_wide[8:length(coralnet_wide)]
  
-p.cover <- round(x = p.cover_matrix / p.cover_matrix$calculation.points, digits = 3)
+p.cover <- round(x = p.cover_matrix / p.cover_matrix$calculation.points, digits = 2)
 p.cover <- cbind(p.cover_meta, p.cover)
 
 # Convert to long format 
 p.cover_long <- p.cover %>%
   select(-calculation.points) %>% 
   reshape2::melt(id.vars = names(p.cover_meta), 
-                 measure.vars = names(p.cover[,7:37])) %>% 
+                 measure.vars = names(p.cover[,8:31])) %>% 
   dplyr::rename(p_cover = value, Species = variable) 
 
-p.cover_long <- p.cover_long %>%
-  mutate(month.number = substr(Name, 3,3),
-         Month = ifelse(month.number == "6", "July",
-                        ifelse(month.number == "7","July","August")))
+stat_cover <- p.cover_long %>% 
+  group_by(Month, Treatment, Treatment_area, Species) %>% 
+  summarise_at(vars(p_cover), funs(mean, sd, median, n()))
+
+# Database without genus with less than 10 counts in the entire data and
+coralnet_clean <- coralnet_wide %>% 
+  select(-c(ACET,ColSin,GracRho, LIA,TRIcleocar, Ulva)) 
+
+clean_meta <- coralnet_clean[1:7]
+clean_matrix <- coralnet_clean[8:length(coralnet_clean)]
+ 
+p.cover_clean <- round(x = clean_matrix / clean_matrix$calculation.points, digits = 2)
+p.cover_clean <- cbind(clean_meta, p.cover_clean)
+
+# Convert to long format 
+p.cover_clean_long <- p.cover_clean %>%
+  select(-calculation.points) %>% 
+  reshape2::melt(id.vars = names(clean_meta), 
+                 measure.vars = names(p.cover_clean[,8:26])) %>% 
+  dplyr::rename(p_cover = value, Species = variable) 
+
+stat_cover_clean <- p.cover_clean_long %>% 
+  group_by(Month, Treatment, Treatment_area, Species) %>% 
+  summarise_at(vars(p_cover), funs(mean, sd, median, n()))
+
+# Main quadrat database
+quad_p.cover <- p.cover_clean_long %>% 
+  filter(Treatment_area == "Quad")
+
+# Buffer zone quadrats database
+buffer_p.cover <- p.cover_clean_long %>% 
+  filter(Treatment_area == "Buffer")
 ```
 
 Plot
 ```{r}
 # Define the number of colors (Taxons) for the stacked plot
-cols <- 37
-mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(cols)
+cols <- 19
+mycolors <- colorRampPalette(brewer.pal(9, "Set1"))(cols)
 
 # Stacked bars
-(algae_p.cover <- ggplot(data = p.cover_long,
+(algae_p.cover <- ggplot(data = quad_p.cover,
                          aes(x = Plot_ID, y = p_cover, fill = Species)) + 
   geom_bar(position = "fill", stat = "identity", width = 0.7)  +
   labs(x = NULL, y = "Relative cover of species", fill = NULL) +
-  facet_grid(Month ~ Treatment_area) +
+  facet_grid(Treatment ~ Month) +
   scale_fill_manual(values = mycolors)) +
   theme(strip.background = element_rect(fill="grey"), 
         strip.text.x     = element_text(size = 14, color = "black"),
@@ -97,5 +149,240 @@ mycolors <- colorRampPalette(brewer.pal(8, "Set1"))(cols)
         axis.title.x = element_blank(),
         legend.position = "right",
         axis.line = element_line(color = "black"))
+```
+
+
+```{r}
+# Mean percent cover of algae genus in the main quad
+(quad_mean_p.cover <- ggplot(data = filter(stat_cover_clean, Treatment_area == "Quad"), aes(x = Treatment, y = mean, fill = Species)) +
+  geom_col(position = "fill", width = 0.7)  +
+  labs(x = NULL, y = "Relative cover of species", fill = NULL) +
+  facet_grid(~Month) +
+  scale_fill_manual(values = mycolors)) +
+  theme(strip.background = element_rect(fill="grey"), 
+        strip.text.x     = element_text(size = 14, color = "black"),
+        strip.text.y     = element_text(size=14, color = "black"),
+        panel.background = element_rect(fill = "white", color = "black"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x      = element_text(color = "black", size = 14, hjust = 1, angle = 40),
+        axis.text.y      = element_text(color = "black", size = 14),
+        axis.title.y     = element_text(size = 16, hjust = .5, vjust = 1),
+        axis.title.x = element_blank(),
+        legend.position = "right",
+        axis.line = element_line(color = "black"))
+
+# Mean percent cover of algae genus in the buffer zone
+(buffer_mean_p.cover <- ggplot(data = filter(stat_cover_clean, Treatment_area == "Buffer"), aes(x = Treatment, y = mean, fill = Species)) +
+  geom_col(position = "fill",width = 0.7)  +
+  labs(x = NULL, y = "Relative cover of species", fill = NULL) +
+  facet_grid(~Month) +
+  scale_fill_manual(values = mycolors)) +
+  theme(strip.background = element_rect(fill="grey"), 
+        strip.text.x     = element_text(size = 14, color = "black"),
+        strip.text.y     = element_text(size=14, color = "black"),
+        panel.background = element_rect(fill = "white", color = "black"),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        axis.text.x      = element_text(color = "black", size = 14, hjust = 1, angle = 40),
+        axis.text.y      = element_text(color = "black", size = 14),
+        axis.title.y     = element_text(size = 16, hjust = .5, vjust = 1),
+        axis.title.x = element_blank(),
+        legend.position = "right",
+        axis.line = element_line(color = "black"))
+```
+
+```{r}
+coralnet_richness <- coralnet_wide %>% 
+  select(-calculation.points)
+
+rich_matrix <- coralnet_richness[8:length(coralnet_richness)]
+coralnet_richness$Richness = rowSums(rich_matrix > 0) 
+
+coralnet_richness <- coralnet_richness %>% 
+  select(c(1:7),Richness)
+
+richness_repeated <- coralnet_richness %>% 
+  group_by(Date, Month, Plot_ID, Treatment.code, Treatment, Treatment_area) %>% 
+  dplyr::summarise_at(vars(Richness), funs(mean)) 
+
+richness_repeated <- richness_repeated[,-4]
+
+richness_repeated <- richness_repeated %>% 
+  pivot_wider(names_from = Treatment, values_from = Richness) %>% 
+  mutate(Poison_delta = Poison - Control,
+         Poison_proportion = Poison/Control,
+         log_poison = log10(Poison_proportion),
+         Removal_delta = Removal - Control, 
+         Removal_proportion = Removal/Control,
+         log_removal = log10(Removal_proportion)) %>% 
+  drop_na()
+
+# Calculate statistics for the different index
+richness_means <- richness_repeated %>% 
+select(-Poison, -Removal, -Control) %>% 
+  pivot_longer(cols = c(5:length(.)), names_to = "Index", values_to = "value") %>% group_by(Month, Treatment_area, Index) %>% 
+  dplyr::summarise_at(vars(value), funs(mean, median, sd, n())) %>% 
+  mutate(conf.int = sd/sqrt(n)*qt(p = 0.975, df = n-1)) %>% 
+  filter(Treatment_area == "Quad")
+```
+
+```{r}
+proportion_data <- richness_means %>% 
+  filter(Index == "Poison_proportion" | Index == "Removal_proportion")  
+
+(proportion.plot <- ggplot(proportion_data, aes(x=Month, y=mean, group=Index, color=Index)) + 
+  geom_point(position = position_dodge(0.5))+
+  geom_errorbar(aes(ymin=mean-conf.int, ymax=mean+conf.int), width=.2,
+                 position=position_dodge(0.5))+
+  geom_hline(yintercept = 1, colour = "red", size = 1)+
+    scale_color_manual(values = c("#009ACD", "#FFC125"))+
+    facet_grid(~Treatment_area)+
+  labs(x = NULL, y = "Proportion")+
+  theme_bw()+
+  theme(legend.text = element_text(size = 14),
+        legend.title = element_blank(),
+        axis.text.x = element_text(color = "black", 
+                                   size = 16, angle = 30, 
+                                   hjust = 1),
+        axis.text.y = element_text(color = "black", size = 16),
+        axis.title.y =  element_text(color = "black", size = 16),
+        legend.position = "right"))
+
+delta_data <- richness_means %>% 
+  filter(Index == "Poison_delta" | Index == "Removal_delta")  
+
+(delta.plot <- ggplot(delta_data, aes(x=Month, y=mean, group=Index, color=Index)) + 
+  geom_point(position = position_dodge(0.5))+
+  geom_errorbar(aes(ymin=mean-conf.int, ymax=mean+conf.int), width=.2,
+                 position=position_dodge(0.5))+
+  geom_hline(yintercept = 0, colour = "red", size = 1)+
+    scale_color_manual(values = c("#009ACD", "#FFC125"))+
+    facet_grid(~Treatment_area)+
+  labs(x = NULL, y = "Delta")+
+  theme_bw()+
+  theme(legend.text = element_text(size = 14),
+        legend.title = element_blank(),
+        axis.text.x = element_text(color = "black", 
+                                   size = 16, angle = 30, 
+                                   hjust = 1),
+        axis.text.y = element_text(color = "black", size = 16),
+        axis.title.y =  element_text(color = "black", size = 16),
+        legend.position = "right"))
+
+lod_data <- richness_means %>% 
+  filter(Index == "log_poison" | Index == "log_removal")  
+
+(log.plot <- ggplot(lod_data, aes(x=Month, y=mean, group=Index, color=Index)) + 
+  geom_point(position = position_dodge(0.5))+
+  geom_errorbar(aes(ymin=mean-conf.int, ymax=mean+conf.int), width=.2,
+                 position=position_dodge(0.5))+
+  geom_hline(yintercept = 0, colour = "red", size = 1)+
+    scale_color_manual(values = c("#009ACD", "#FFC125"))+
+    facet_grid(~Treatment_area)+
+  labs(x = NULL, y = "Log ratio")+
+  theme_bw()+
+  theme(legend.text = element_text(size = 14),
+        legend.title = element_blank(),
+        axis.text.x = element_text(color = "black", 
+                                   size = 16, angle = 30, 
+                                   hjust = 1),
+        axis.text.y = element_text(color = "black", size = 16),
+        axis.title.y =  element_text(color = "black", size = 16),
+        legend.position = "right"))
+```
+
+
+
+#nMDS
+```{r}
+# Treatments colors: control, poison, removal
+a.colors <- c("#EE6F52", "#009ACD", "#FFC125")
+
+mds_p.cover <- p.cover %>% 
+  select(-calculation.points) %>% 
+  filter(Treatment_area == "Quad") 
+
+sp.matrix <- mds_p.cover[8:length(mds_p.cover)]
+sp.env <- mds_p.cover[1:7]
+
+log.sp.matrix <- decostand(sp.matrix, "log")
+sqrt.sp.matrix <- sqrt(sp.matrix)
+logit.sp.matrix <- car::logit(sp.matrix, percents = T, adjust = 0.0001)
+#logit.sp.matrix1 <- as.data.frame(lapply(sp.matrix, function(x) log(x/(100-x))))
+
+#asinTransform <- function(p) { asin(sqrt(p)) }
+
+#arcsin.sp.matrix <- asinTransform(sp.ma)
+
+# MDS by months
+treatment_mds <- metaMDS(sp.matrix, distance = "bray", k = 2, try = 75, autotransform = T)
+
+plot(treatment_mds, type = "n", display = "sites",main=paste("Treatment comparison - Log transformed. k=2 Stress =",round(treatment_mds$stress,3)))
+#orditorp(ord, display="species",col="dark grey",air=0.01)
+points(treatment_mds, display = "sites", pch = 17, col = a.colors[as.factor(sp.env$Treatment)], cex=1.5)
+
+
+treatment.rda <- rda(sqrt.sp.matrix ~ Treatment*Month, sp.env)
+plot(treatment.rda) 
+summary(treatment.rda)
+```
+
+
+# ANOSIM
+```{r}
+p.cover_data <- p.cover_clean %>% 
+  select(-calculation.points) %>% 
+  filter(Treatment_area == "Quad")
+sp.matrix1 <- p.cover_data[8:length(p.cover_data)]
+sp.env1 <- p.cover_data[1:8]
+
+july.p.cover <- p.cover_data %>% 
+  filter(Month == "July 20") 
+
+july.sp.matrix1 <- july.p.cover[8:length(july.p.cover)]
+july.sp.env1 <- july.p.cover[1:8]
+
+july.ano <- anosim(decostand(july.sp.matrix1,"log"), july.sp.env1$Treatment, permutations = 999, distance = "bray")
+summary(july.ano)
+
+aug.p.cover <- p.cover_data %>% 
+  filter(Month == "August 20") 
+
+aug.sp.matrix1 <- aug.p.cover[8:length(aug.p.cover)]
+aug.sp.env1 <- aug.p.cover[1:8]
+
+aug.ano <- anosim(aug.sp.matrix1, aug.sp.env1$Treatment, permutations = 999, distance = "bray")
+summary(aug.ano)
+
+
+nov.p.cover <- p.cover_data %>% 
+  filter(Month == "November 20") 
+
+nov.sp.matrix1 <- nov.p.cover[8:length(nov.p.cover)]
+nov.sp.env1 <- nov.p.cover[1:8]
+
+nov.ano <- anosim(nov.sp.matrix1, nov.sp.env1$Treatment, permutations = 999, distance = "bray")
+summary(nov.ano)
+
+
+dec.p.cover <- p.cover_data %>% 
+  filter(Month == "December 20") 
+
+dec.sp.matrix1 <- dec.p.cover[8:length(dec.p.cover)]
+dec.sp.env1 <- dec.p.cover[1:8]
+
+dec.ano <- anosim(dec.sp.matrix1, dec.sp.env1$Treatment, permutations = 999, distance = "bray")
+summary(dec.ano)
+
+
+may.p.cover <- p.cover_data %>% 
+  filter(Month == "May 21") 
+
+may.sp.matrix1 <- may.p.cover[8:length(may.p.cover)]
+may.sp.env1 <- may.p.cover[1:8]
+
+may.ano <- anosim(may.sp.matrix1, may.sp.env1$Treatment, permutations = 999, distance = "bray")
+summary(may.ano)
 ```
 
